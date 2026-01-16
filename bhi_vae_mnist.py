@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
+from optim.muon import Muon
 
 @dataclass
 class GateConfig:
@@ -226,7 +227,24 @@ def train(args: argparse.Namespace) -> None:
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
 
     model = BHiVAE(latent_dim=args.latent_dim, img_size=args.img_size).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    beta1 = args.momentum if args.momentum is not None else args.beta1
+    betas = (beta1, args.beta2)
+    if args.optimizer == "muon":
+        optimizer = Muon(
+            model.parameters(),
+            lr=args.lr,
+            betas=betas,
+            weight_decay=args.weight_decay,
+        )
+    elif args.optimizer == "adam":
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=args.lr,
+            betas=betas,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
     classifier = None
     if args.classifier_path:
@@ -266,7 +284,8 @@ def train(args: argparse.Namespace) -> None:
 
             if step % args.log_every == 0:
                 message = (
-                    f"epoch={epoch} step={step} loss={loss.item():.4f} "
+                    f"epoch={epoch} step={step} optimizer={args.optimizer} "
+                    f"loss={loss.item():.4f} "
                     f"recon={metrics['recon_loss'].mean().item():.3f} "
                     f"kl={metrics['kl'].mean().item():.3f} "
                     f"ink={metrics['ink_mass'].mean().item():.3f} "
@@ -287,6 +306,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer",
+        choices=("muon", "adam"),
+        default="muon",
+        help="Optimizer choice (Muon uses Adam-style betas).",
+    )
+    parser.add_argument(
+        "--beta1",
+        type=float,
+        default=0.9,
+        help="Optimizer beta1 coefficient (momentum term).",
+    )
+    parser.add_argument("--beta2", type=float, default=0.999, help="Optimizer beta2 coefficient.")
+    parser.add_argument(
+        "--momentum",
+        type=float,
+        default=None,
+        help="Optional momentum override for beta1.",
+    )
+    parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay.")
     parser.add_argument("--latent-dim", type=int, default=16)
     parser.add_argument("--img-size", type=int, choices=(28, 64), default=28)
     parser.add_argument("--decoder-likelihood", choices=("bernoulli", "gaussian"), default="bernoulli")
